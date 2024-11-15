@@ -346,65 +346,74 @@ export const useCellInnerDivStylingProps = (
 
 /**
  *
- * @returns [data, onChangeData] pair, with setData debouncing the propagation
- * also data is always partially updated
- * @param nodeId the id of a cell
+ * @returns [data, onChangeData] tuple. onChangeData is debouncing the propagation.
+ * Data is always partially updated.
+ *
+ * @param nodeId the id of the cell
  */
 export const useDebouncedCellData = (nodeId: string) => {
   const cellData = useCellData(nodeId);
-  const [, setData] = useState(cellData);
-  const dataRef = useRef(cellData);
 
+  const [currentPartialData, setCurrentPartialData] = useState<{
+    [lang: string]: Record<string, unknown>;
+  }>({});
+  const currentPartialDataRef = useRef<{
+    [lang: string]: Record<string, unknown>;
+  }>();
   const currentLang = useLang();
-  const cellDataRef = useRef(cellData);
 
-  const updateCellDataImmediate = useUpdateCellData(nodeId);
-  const updateCellDataDebounced = useCallback(
-    debounce((options?: CellPluginOnChangeOptions) => {
-      cellDataRef.current = dataRef.current;
-      updateCellDataImmediate(dataRef.current, options);
-    }, 200),
-    [updateCellDataImmediate]
-  );
+  const currentData = useMemo(() => {
+    return {
+      ...(cellData ?? {}),
+      ...(currentPartialData[currentLang] ?? {}),
+    };
+  }, [currentLang, currentPartialData, cellData]);
 
-  const changed = useMemo(
-    () => !deepEquals(cellData, cellDataRef.current),
-    [cellData]
-  );
+  const updateHandles = useRef<{
+    [lang: string]: {
+      timeoutHandle?: NodeJS.Timeout;
+    };
+  }>({});
 
-  useEffect(() => {
-    // changed from "outside" overwrite whatever is pending
-    if (changed) {
-      cellDataRef.current = cellData;
-      dataRef.current = cellData;
-      setData(cellData);
-    }
-  }, [changed, cellData]);
+  const updateCellDataImmediatly = useUpdateCellData(nodeId);
 
   const onChange = useCallback(
     (
       partialData: Record<string, unknown>,
       options?: CellPluginOnChangeOptions
     ) => {
-      // special handling if non default language is changed (special custom code)
-      if (options?.lang && options.lang !== currentLang) {
-        // this hook is a bit hacky, because we keep around state of changes and debounce changes
-        // its probably not the cleanest solution
-        // however this handling is problematic, if you change any other language.
-        // this is rarely used and only in custom code
-        // however, we don't need the debouncing if other languages are changed, because they are not visible anyway and do not feed back into this component
-        updateCellDataImmediate(partialData, options);
-      } else {
-        dataRef.current = {
-          ...dataRef.current,
-          ...partialData,
-        };
-        setData(dataRef.current);
-
-        updateCellDataDebounced(options);
+      const lang = options?.lang ?? currentLang;
+      // if one debounced callback exists for the same language, cancel it
+      if (updateHandles.current?.[lang]?.timeoutHandle)
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+        clearTimeout(updateHandles.current[lang].timeoutHandle!);
+      if (!updateHandles.current[lang]) {
+        updateHandles.current[lang] = {};
       }
+      currentPartialDataRef.current = {
+        ...(currentPartialDataRef.current ?? {}),
+        [lang]: {
+          ...(cellData ?? {}),
+          ...(currentPartialDataRef.current?.[lang] ?? {}),
+          ...(partialData ?? {}),
+        },
+      };
+
+      setCurrentPartialData(currentPartialDataRef.current);
+
+      updateHandles.current[lang].timeoutHandle = setTimeout(() => {
+        updateCellDataImmediatly(currentPartialDataRef.current?.[lang] ?? {}, {
+          ...(options ?? {}),
+          lang,
+        });
+        setCurrentPartialData({ [lang]: {} });
+        if (currentPartialDataRef.current?.[lang])
+          delete currentPartialDataRef.current?.[lang];
+        delete updateHandles.current[lang];
+      }, 200);
     },
-    [updateCellDataDebounced, updateCellDataImmediate, setData, currentLang]
+    [updateCellDataImmediatly, currentLang, cellData]
   );
-  return [dataRef.current, onChange] as const;
+
+  return [currentData, onChange] as const;
 };

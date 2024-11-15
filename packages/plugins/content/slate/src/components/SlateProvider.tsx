@@ -1,5 +1,6 @@
 import { deepEquals } from '@react-page/editor';
 import type { FC, PropsWithChildren } from 'react';
+
 import React, { useCallback, useEffect, useMemo } from 'react';
 import { createEditor, Transforms } from 'slate';
 import { ReactEditor, Slate, withReact } from 'slate-react';
@@ -19,16 +20,20 @@ const SlateProvider: FC<PropsWithChildren<SlateProps>> = (props) => {
     []
   );
 
-  useEffect(() => {
-    // unfortunatly, slate broke the controlled input pattern. So we have to hack our way around it, see https://github.com/ianstormtaylor/slate/issues/4992
+  // unfortunatly, slate broke the controlled input pattern. So we have to hack our way around it, see https://github.com/ianstormtaylor/slate/issues/4992
+  useMemo(() => {
+    // better do this in use effect to avoid certain timing edge cases
     editor.children = data?.slate;
+  }, [data?.slate]);
 
+  useEffect(() => {
+    try {
+      // focus
+      ReactEditor.focus(editor);
+    } catch (e) {
+      // ignore, can happen
+    }
     if (data.selection) {
-      try {
-        ReactEditor.focus(editor);
-      } catch (e) {
-        // ignore, can happen
-      }
       // update seleciton, if changed from outside (e.g. through undo)
       Transforms.select(editor, data.selection);
     } else {
@@ -37,26 +42,23 @@ const SlateProvider: FC<PropsWithChildren<SlateProps>> = (props) => {
     }
   }, [data?.slate, data?.selection]);
 
-  const onChange = useCallback(
-    (v: any) => {
-      if (
-        !deepEquals(editor.children, data?.slate) ||
-        !deepEquals(editor.selection, data?.selection)
-      )
-        props.onChange(
-          {
-            slate: editor.children,
-            selection: editor.selection,
-          },
-          {
-            // mark as not undoable when state is same
-            // that happens if only selection was changed
-            notUndoable: deepEquals(editor.children, data?.slate),
-          }
-        );
-    },
-    [data?.slate]
-  );
+  const onChange = useCallback(() => {
+    const dataEqual = deepEquals(editor.children, data?.slate);
+    const selectionEqual = deepEquals(editor.selection, data?.selection);
+
+    if (!dataEqual || !selectionEqual)
+      props.onChange(
+        {
+          slate: editor.children,
+          selection: editor.selection,
+        },
+        {
+          // mark as not undoable when state is same
+          // that happens if only selection was changed
+          notUndoable: dataEqual,
+        }
+      );
+  }, [data?.slate, props.onChange]);
 
   const initialValue = data?.slate;
 
